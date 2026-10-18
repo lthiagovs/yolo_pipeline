@@ -6,8 +6,14 @@ __pycache__/
 # C extensions
 *.so
 
+# YOLO
+*.pt
+
 # Distribution / packaging
 .Python
+data/
+dataset/
+runs/
 build/
 develop-eggs/
 dist/
