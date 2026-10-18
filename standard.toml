@@ -1,0 +1,7 @@
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "N"]
+fixable = ["ALL"]
