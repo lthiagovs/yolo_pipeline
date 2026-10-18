@@ -2,7 +2,7 @@ from pathlib import Path
 
 from ultralytics import YOLO
 
-import verbose as Verbose
+import src.helpers.verbose as Verbose
 
 _TAG = "YOLO"
 

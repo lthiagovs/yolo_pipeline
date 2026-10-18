@@ -2,9 +2,9 @@ import ast
 
 import cv2 as ValidateWindow
 
-import folder as Folder
-import metadata as Metadata
-import verbose as Verbose
+import src.data.folder as Folder
+import src.data.metadata as Metadata
+import src.helpers.verbose as Verbose
 
 _TAG = "VALIDATION_WINDOW"
 

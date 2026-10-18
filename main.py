@@ -1,11 +1,11 @@
-import dataset as Dataset
-import folder as Folder
-import image_seeker as ImageSeeker
-import metadata as Metadata
-import model as Model
-import validate_window as ValidateWindow
-import verbose as Verbose
-import yolo as Yolo
+import src.data.dataset as Dataset
+import src.data.folder as Folder
+import src.image.image_seeker as ImageSeeker
+import src.data.metadata as Metadata
+import src.model.model as Model
+import src.interface.validate_window as ValidateWindow
+import src.helpers.verbose as Verbose
+import src.model.yolo as Yolo
 
 _TAG = "MAIN"
 

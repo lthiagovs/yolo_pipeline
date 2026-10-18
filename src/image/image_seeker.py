@@ -1,9 +1,9 @@
 import requests
 from ddgs import DDGS
 
-import folder as Folder
-import metadata as Metadata
-import verbose as Verbose
+import src.data.folder as Folder
+import src.data.metadata as Metadata
+import src.helpers.verbose as Verbose
 
 _TAG = "IMAGE SEEKER"
 
