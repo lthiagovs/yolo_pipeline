@@ -268,3 +268,128 @@ def GenerateDataset(folder_name):
         )
 
     CheckDataset()
+
+def EnhanceData(folder):
+
+    source_folder = Folder.GetFolder(folder)
+
+    files = sorted(
+        (
+            file
+            for file in source_folder.iterdir()
+            if file.is_file()
+            and file.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")
+            and file.stem.startswith("image")
+            and file.stem[5:].isdigit()
+        ),
+        key=lambda file: int(file.stem[5:]),
+    )
+
+    metadata = Metadata.metadata_content_buffer
+
+    if metadata is None or isinstance(metadata, str):
+        raise RuntimeError("Metadata is not configured.")
+
+    annotations = {}
+
+    for line in metadata:
+        parts = line.split("|", 2)
+
+        if len(parts) != 3 or parts[0] != folder:
+            continue
+
+        try:
+            image_number = int(parts[1])
+            box = ast.literal_eval(parts[2])
+            annotations.setdefault(image_number, []).append(box)
+        except (ValueError, SyntaxError):
+            continue
+
+    def TransformBox(box, width, height, operation):
+        (x1, y1), (x2, y2) = box
+
+        x_min, x_max = sorted((int(x1), int(x2)))
+        y_min, y_max = sorted((int(y1), int(y2)))
+
+        if operation in ("flip_h", "rotate_180"):
+            x_min, x_max = width - 1 - x_max, width - 1 - x_min
+
+        if operation in ("flip_v", "rotate_180"):
+            y_min, y_max = height - 1 - y_max, height - 1 - y_min
+
+        return (
+            (max(0, x_min), max(0, y_min)),
+            (min(width - 1, x_max), min(height - 1, y_max)),
+        )
+
+    next_number = max((int(file.stem[5:]) for file in files), default=-1) + 1
+
+    created = 0
+
+    for file in files:
+        image_number = int(file.stem[5:])
+        boxes = annotations.get(image_number, [])
+
+        if not boxes:
+            continue
+
+        image = cv2.imread(str(file))
+
+        if image is None:
+            continue
+
+        height, width = image.shape[:2]
+
+        transformations = [
+            (
+                "grayscale",
+                cv2.cvtColor(image, cv2.COLOR_BGR2GRAY),
+            ),
+            ("flip_h", cv2.flip(image, 1)),
+            ("flip_v", cv2.flip(image, 0)),
+            ("rotate_180", cv2.rotate(image, cv2.ROTATE_180)),
+            ("brightness", cv2.convertScaleAbs(image, alpha=1.2, beta=20)),
+        ]
+
+        for operation, augmented in transformations:
+            new_boxes = [TransformBox(box, width, height, operation) for box in boxes]
+
+            if len(augmented.shape) == 2:
+                augmented = cv2.cvtColor(
+                    augmented, cv2.COLOR_GRAY2BGR
+                )
+
+            success, encoded = cv2.imencode(".jpg", augmented)
+
+            if not success:
+                continue
+
+            new_name = f"image{next_number}.jpg"
+            output_path = source_folder / new_name
+
+            try:
+                with open(output_path, "wb") as output_file:
+                    output_file.write(encoded.tobytes())
+            except OSError as error:
+                Verbose.Write(
+                    _TAG,
+                    f"Failed to save {new_name}: {error}",
+                    Verbose.CONSOLE_STATUS.ERROR,
+                )
+                continue
+
+            for box in new_boxes:
+                Metadata.Write(f"{folder}|{next_number}|{box}")
+
+            Verbose.Write(
+                _TAG, f"Saved {new_name} ({operation})", Verbose.CONSOLE_STATUS.SUCCESS
+            )
+
+            next_number += 1
+            created += 1
+
+    Verbose.Write(
+        _TAG,
+        f"Created {created} augmented images in {source_folder}.",
+        Verbose.CONSOLE_STATUS.SUCCESS,
+    )
