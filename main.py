@@ -56,6 +56,8 @@ def BuildData():
 
     ImageSeeker.Search(url, image_limit)
 
+Folder.Configure("")
+Metadata.Configure()
 
 while True:
     Folder.Configure("")
