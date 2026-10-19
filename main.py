@@ -205,7 +205,11 @@ def DatasetStats():
         elif file.suffix.lower() == ".txt":
             labels += 1
 
-    return {"images": images, "labels": labels, "modified": DATASET_YAML.stat().st_mtime}
+    return {
+        "images": images,
+        "labels": labels,
+        "modified": DATASET_YAML.stat().st_mtime,
+    }
 
 
 def FindModel():
@@ -340,7 +344,9 @@ def ModelRenderable(status):
     if model is None:
         grid.add_row("Model", Text("not trained yet", style=WARN))
     else:
-        grid.add_row("Model", Text(f"{model.parent.parent.name} / {model.name}", style="bold"))
+        grid.add_row(
+            "Model", Text(f"{model.parent.parent.name} / {model.name}", style="bold")
+        )
 
         stat = status["model_stat"]
 
@@ -422,7 +428,6 @@ def OpenFile(path):
 
 
 class FormScreen(ModalScreen):
-
     BINDINGS = [("escape", "cancel", "Cancel")]
 
     def __init__(self, title, fields, submit="OK", subtitle=""):
@@ -495,7 +500,13 @@ class FormScreen(ModalScreen):
             kind = field.get("kind", "text")
 
             try:
-                value = int(raw) if kind == "int" else float(raw) if kind == "float" else raw
+                value = (
+                    int(raw)
+                    if kind == "int"
+                    else float(raw)
+                    if kind == "float"
+                    else raw
+                )
             except ValueError:
                 self.Fail(f"{field['label']} must be a number.", widget)
                 return
@@ -504,7 +515,9 @@ class FormScreen(ModalScreen):
                 low = field.get("min")
                 high = field.get("max")
 
-                if (low is not None and value < low) or (high is not None and value > high):
+                if (low is not None and value < low) or (
+                    high is not None and value > high
+                ):
                     self.Fail(
                         f"{field['label']} must be between {low} and {high}.", widget
                     )
@@ -520,7 +533,6 @@ class FormScreen(ModalScreen):
 
 
 class ConfirmScreen(ModalScreen):
-
     BINDINGS = [("escape", "cancel", "Cancel")]
 
     def __init__(self, title, message, confirm="Confirm", phrase=None, danger=False):
@@ -585,7 +597,6 @@ class ConfirmScreen(ModalScreen):
 
 
 class ImageTree(DirectoryTree):
-
     def filter_paths(self, paths):
         return [path for path in paths if self.Visible(path)]
 
@@ -600,7 +611,6 @@ class ImageTree(DirectoryTree):
 
 
 class FilePickerScreen(ModalScreen):
-
     BINDINGS = [("escape", "cancel", "Cancel")]
 
     def __init__(self, title="Choose an image"):
@@ -655,7 +665,6 @@ class FilePickerScreen(ModalScreen):
 
 
 class PipelineApp(App):
-
     TITLE = APP_TITLE
 
     CSS = """
@@ -802,7 +811,9 @@ class PipelineApp(App):
     }
     """
 
-    BINDINGS = [Binding(str(number), f"choose('{number}')", show=False) for number in range(10)] + [
+    BINDINGS = [
+        Binding(str(number), f"choose('{number}')", show=False) for number in range(10)
+    ] + [
         Binding("r", "refresh_status", "Refresh"),
         Binding("c", "clear_log", "Clear log"),
         Binding("q", "quit_app", "Quit"),
@@ -824,9 +835,7 @@ class PipelineApp(App):
                 with Horizontal(id="top_row"):
                     with Vertical(id="project_box", classes="panel"):
                         yield Static(id="project")
-                        yield ProgressBar(
-                            total=100, show_eta=False, id="progress"
-                        )
+                        yield ProgressBar(total=100, show_eta=False, id="progress")
 
                     with Vertical(id="model_box", classes="panel"):
                         yield Static(id="model")
@@ -843,9 +852,7 @@ class PipelineApp(App):
             if index:
                 options.append(None)
 
-            options.append(
-                Option(Text(group, style=f"bold {MUTED}"), disabled=True)
-            )
+            options.append(Option(Text(group, style=f"bold {MUTED}"), disabled=True))
 
             for number, label, description in items:
                 options.append(
@@ -870,7 +877,9 @@ class PipelineApp(App):
         self.query_one("#menu").focus()
 
         self.RestoreSession()
-        self.Log("Ready. Use the arrows and Enter, press a number, or open Ctrl+P for every command.")
+        self.Log(
+            "Ready. Use the arrows and Enter, press a number, or open Ctrl+P for every command."
+        )
         self.RefreshStatus()
 
     def get_system_commands(self, screen):
@@ -928,7 +937,9 @@ class PipelineApp(App):
     def ApplyStatus(self, status):
         SyncModelPath(status["model"])
 
-        self.sub_title = f"target: {status['folder']}" if status["folder"] else "no target folder"
+        self.sub_title = (
+            f"target: {status['folder']}" if status["folder"] else "no target folder"
+        )
         self.query_one("#project", Static).update(ProjectRenderable(status))
         self.query_one("#model", Static).update(ModelRenderable(status))
         self.query_one("#pipeline", Static).update(PipelineRenderable(status))
@@ -1119,10 +1130,15 @@ class PipelineApp(App):
             return
 
         def Run():
-            Console().print("Annotator open. Close its window to return to the dashboard.", style="dim")
+            Console().print(
+                "Annotator open. Close its window to return to the dashboard.",
+                style="dim",
+            )
 
             if Interface.Start(self.folder_name):
-                raise ActionFailed("The annotator could not start. See the messages above.")
+                raise ActionFailed(
+                    "The annotator could not start. See the messages above."
+                )
 
         self.RunInTerminal("Annotate", Run, pause=False)
 
@@ -1164,7 +1180,9 @@ class PipelineApp(App):
 
     def RequireModel(self):
         if FindModel() is None:
-            self.notify("No trained model found. Train one first (option 5).", severity="error")
+            self.notify(
+                "No trained model found. Train one first (option 5).", severity="error"
+            )
             return False
 
         SyncModelPath(FindModel())
@@ -1186,7 +1204,9 @@ class PipelineApp(App):
         if not self.RequireModel():
             return
 
-        path = await self.push_screen_wait(FilePickerScreen("Choose the image to analyze"))
+        path = await self.push_screen_wait(
+            FilePickerScreen("Choose the image to analyze")
+        )
 
         if not path:
             return
@@ -1214,7 +1234,10 @@ class PipelineApp(App):
             return
 
         started = time.time()
-        output = Path(getattr(Model, "OUTPUT_FOLDER", "runs/detect/predict")) / f"{Path(path).stem}_detected.jpg"
+        output = (
+            Path(getattr(Model, "OUTPUT_FOLDER", "runs/detect/predict"))
+            / f"{Path(path).stem}_detected.jpg"
+        )
 
         def Run():
             Model.LoadModel()

@@ -212,7 +212,6 @@ def RetryDelay(response, attempt):
 
 
 class HttpClient:
-
     def __init__(self, delay):
         self.delay = delay
         self.session = NewSession(4)
@@ -256,7 +255,6 @@ class HttpClient:
 
 
 class HashStore:
-
     def __init__(self, path):
         self.path = path
         self.array = np.zeros(1024, dtype=np.uint64)
@@ -598,7 +596,6 @@ def BestFromSrcset(text):
 
 
 class PageParser(HTMLParser):
-
     def __init__(self, base):
         super().__init__(convert_charrefs=True)
         self.base = base
@@ -637,12 +634,15 @@ class PageParser(HTMLParser):
             self.AddImage(source)
 
         elif tag == "source":
-            self.AddImage(BestFromSrcset(values.get("srcset") or values.get("data-srcset")))
+            self.AddImage(
+                BestFromSrcset(values.get("srcset") or values.get("data-srcset"))
+            )
 
         elif tag == "meta":
-            if values.get("property") in ("og:image", "twitter:image") or values.get(
-                "name"
-            ) == "twitter:image":
+            if (
+                values.get("property") in ("og:image", "twitter:image")
+                or values.get("name") == "twitter:image"
+            ):
                 self.AddImage(values.get("content"))
 
         elif tag == "link":
