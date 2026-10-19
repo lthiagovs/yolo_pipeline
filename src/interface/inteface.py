@@ -1,3 +1,5 @@
+import ast
+import os
 import sys
 from functools import lru_cache
 from pathlib import Path
@@ -31,6 +33,7 @@ from PySide6.QtCore import QFile, Qt, QRectF, QPointF, QSize
 
 import src.helpers.verbose as Verbose
 import src.data.folder as Folder
+import src.data.metadata as Metadata
 
 _TAG = "INTERFACE"
 
@@ -41,6 +44,7 @@ UI_FILE = QFile(str(UI_PATH))
 MAX_CLASSES = 150
 GOLDEN_RATIO = 0.618033988749895
 MIN_BOX_SIZE = 2
+DEFAULT_CLASS = 1
 METHOD_MANUAL = "Manual"
 METHOD_GRABCUT = "GrabCut"
 METHOD_MAGIC_WAND = "Magic Wand"
@@ -88,6 +92,9 @@ image_files = []
 image_count = 0
 boxes_by_image = {}
 class_names = {}
+folder_key = ""
+other_lines = []
+saved_lines = {}
 
 
 @lru_cache(maxsize=None)
@@ -700,6 +707,8 @@ def Start(folder):
         )
         return 1
 
+    LoadMetadata(folder)
+
     if not Configure():
         return 1
 
@@ -804,7 +813,143 @@ def Back():
     Navigate(-1)
 
 
+def NormalizeFolder(text):
+    return os.path.normcase(os.path.normpath(text.strip()))
+
+
+def ReadMetadataLines():
+    return [str(line).rstrip("\r\n") for line in Metadata.Read()]
+
+
+def WriteMetadataLines(lines):
+    if not Metadata.Rewrite(lines):
+        raise OSError("metadata file is not open")
+
+
+def SerializeBoxes(index, boxes):
+    name = image_files[index].name
+    lines = []
+
+    for box, class_id in boxes:
+        start = (round(box.left()), round(box.top()))
+        end = (round(box.right()), round(box.bottom()))
+
+        lines.append(f"{folder_key}|{index}|{(start, end)}|{class_id}|{name}")
+
+    return lines
+
+
+def ParseMetadataLine(parts, name_to_index):
+    try:
+        (x1, y1), (x2, y2) = ast.literal_eval(parts[2])
+        class_id = int(parts[3]) if len(parts) > 3 else DEFAULT_CLASS
+
+        if len(parts) > 4 and parts[4]:
+            index = name_to_index.get(parts[4])
+        else:
+            index = int(parts[1])
+
+        if index is None or not 0 <= index < len(image_files):
+            return None
+
+        box = QRectF(QPointF(x1, y1), QPointF(x2, y2)).normalized()
+
+        return index, box, class_id
+    except (ValueError, TypeError, SyntaxError, IndexError):
+        return None
+
+
+def LoadMetadata(folder):
+    global folder_key, image_count
+
+    folder_key = str(folder)
+    key = NormalizeFolder(folder_key)
+    name_to_index = {file.name: i for i, file in enumerate(image_files)}
+
+    other_lines.clear()
+    saved_lines.clear()
+
+    try:
+        lines = ReadMetadataLines()
+    except OSError:
+        lines = []
+
+    seen = set()
+
+    for line in lines:
+        if not line.strip():
+            continue
+
+        parts = line.split("|")
+
+        if NormalizeFolder(parts[0]) != key:
+            other_lines.append(line)
+            continue
+
+        parsed = ParseMetadataLine(parts, name_to_index)
+
+        if parsed is None:
+            other_lines.append(line)
+            Verbose.Write(
+                _TAG,
+                f"Ignored metadata line: {line}",
+                Verbose.CONSOLE_STATUS.ERROR
+            )
+            continue
+
+        index, box, class_id = parsed
+        signature = (
+            index,
+            round(box.left()),
+            round(box.top()),
+            round(box.right()),
+            round(box.bottom()),
+            class_id,
+        )
+
+        if signature in seen:
+            continue
+
+        seen.add(signature)
+        boxes_by_image.setdefault(image_files[index], []).append(
+            (box, class_id)
+        )
+
+    for index, path in enumerate(image_files):
+        boxes = boxes_by_image.get(path)
+
+        if boxes:
+            saved_lines[index] = SerializeBoxes(index, boxes)
+
+    if saved_lines:
+        image_count = max(saved_lines)
+
+
+def SaveMetadata():
+    lines = list(other_lines)
+
+    for index in sorted(saved_lines):
+        lines.extend(saved_lines[index])
+
+    try:
+        WriteMetadataLines(lines)
+    except OSError as error:
+        Verbose.Write(
+            _TAG,
+            f"Failed to save metadata: {error}",
+            Verbose.CONSOLE_STATUS.ERROR
+        )
+
+
 def OnBoxesChanged():
+    lines = SerializeBoxes(image_count, canvas.boxes)
+
+    if lines:
+        saved_lines[image_count] = lines
+    else:
+        saved_lines.pop(image_count, None)
+
+    SaveMetadata()
     UpdateStatus()
 
 
