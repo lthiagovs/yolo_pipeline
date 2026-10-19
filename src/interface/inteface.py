@@ -14,12 +14,14 @@ from PySide6.QtWidgets import (
     QPushButton,
     QComboBox,
     QLineEdit,
+    QCheckBox,
     QVBoxLayout,
     QSizePolicy,
 )
 from PySide6.QtUiTools import QUiLoader
 from PySide6.QtGui import (
     QImage,
+    QImageReader,
     QPixmap,
     QPainter,
     QPen,
@@ -63,6 +65,13 @@ METHOD_HINTS = {
 }
 TOLERANCES = [5, 10, 15, 20, 25, 30, 40, 50, 60, 80]
 DEFAULT_TOLERANCE = 25
+MODEL_PATH = Path("runs/detect/runs/model/weights/best.pt")
+MODEL_GLOB = "runs/**/weights/best.pt"
+MODEL_IMAGE_SIZE = 1024
+MODEL_DEVICE = None
+CONFIDENCES = [0.10, 0.15, 0.25, 0.35, 0.50, 0.65, 0.80]
+DEFAULT_CONFIDENCE = 0.25
+PREDICT_DUPLICATE_IOU = 0.7
 WORK_MAX_SIDE = 400
 GRABCUT_ITERATIONS = 4
 GRABCUT_PADDING = 0.1
@@ -83,6 +92,11 @@ WIDGET_TYPES = {
     "tolerance_label": QLabel,
     "tolerance_dropdown": QComboBox,
     "hint_label": QLabel,
+    "model_bar": QWidget,
+    "model_label": QLabel,
+    "conf_dropdown": QComboBox,
+    "auto_predict_check": QCheckBox,
+    "predict_button": QPushButton,
 }
 
 window = None
@@ -95,6 +109,9 @@ class_names = {}
 folder_key = ""
 other_lines = []
 saved_lines = {}
+model = None
+model_path = None
+predicted_images = set()
 
 
 @lru_cache(maxsize=None)
@@ -110,7 +127,11 @@ def GetClassColor(class_id):
 def GetContrastColor(class_id):
     color = GetClassColor(class_id)
 
-    luminance = 0.299 * color.red() + 0.587 * color.green() + 0.114 * color.blue()
+    luminance = (
+        0.299 * color.red()
+        + 0.587 * color.green()
+        + 0.114 * color.blue()
+    )
 
     return QColor("#000000") if luminance > 140 else QColor("#FFFFFF")
 
@@ -125,7 +146,11 @@ def RunRefinement(function, *args):
     try:
         return function(*args)
     except cv2.error as error:
-        Verbose.Write(_TAG, f"Refinement failed: {error}", Verbose.CONSOLE_STATUS.ERROR)
+        Verbose.Write(
+            _TAG,
+            f"Refinement failed: {error}",
+            Verbose.CONSOLE_STATUS.ERROR
+        )
         return None
     finally:
         QApplication.restoreOverrideCursor()
@@ -148,7 +173,13 @@ def Downscale(region):
 
     scale = WORK_MAX_SIDE / side
 
-    small = cv2.resize(region, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    small = cv2.resize(
+        region,
+        None,
+        fx=scale,
+        fy=scale,
+        interpolation=cv2.INTER_AREA
+    )
 
     return small, scale
 
@@ -162,7 +193,10 @@ def MaskToRect(mask, origin_x, origin_y, scale, min_pixels, bounds):
     x, y, width, height = cv2.boundingRect(mask)
 
     rect = QRectF(
-        origin_x + x / scale, origin_y + y / scale, width / scale, height / scale
+        origin_x + x / scale,
+        origin_y + y / scale,
+        width / scale,
+        height / scale
     ).intersected(bounds)
 
     if rect.width() < MIN_BOX_SIZE or rect.height() < MIN_BOX_SIZE:
@@ -179,7 +213,7 @@ def GrabCut(array, box):
         -box.width() * GRABCUT_PADDING,
         -box.height() * GRABCUT_PADDING,
         box.width() * GRABCUT_PADDING,
-        box.height() * GRABCUT_PADDING,
+        box.height() * GRABCUT_PADDING
     )
 
     x0, y0, x1, y1 = ClampRect(padded, width, height)
@@ -204,15 +238,22 @@ def GrabCut(array, box):
         background_model,
         foreground_model,
         GRABCUT_ITERATIONS,
-        cv2.GC_INIT_WITH_RECT,
+        cv2.GC_INIT_WITH_RECT
     )
 
     foreground = np.where(
-        (mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD), 255, 0
+        (mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD),
+        255,
+        0
     ).astype(np.uint8)
 
     return MaskToRect(
-        foreground, x0, y0, scale, MIN_REGION_RATIO * rect_w * rect_h, bounds
+        foreground,
+        x0,
+        y0,
+        scale,
+        MIN_REGION_RATIO * rect_w * rect_h,
+        bounds
     )
 
 
@@ -230,25 +271,35 @@ def AutoFit(array, box):
     gray = cv2.cvtColor(small, cv2.COLOR_RGB2GRAY)
     gray = cv2.GaussianBlur(gray, (5, 5), 0)
 
-    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    _, binary = cv2.threshold(
+        gray,
+        0,
+        255,
+        cv2.THRESH_BINARY + cv2.THRESH_OTSU
+    )
 
     ring = max(2, min(binary.shape) // 20)
 
-    border = np.concatenate(
-        [
-            binary[:ring].ravel(),
-            binary[-ring:].ravel(),
-            binary[:, :ring].ravel(),
-            binary[:, -ring:].ravel(),
-        ]
-    )
+    border = np.concatenate([
+        binary[:ring].ravel(),
+        binary[-ring:].ravel(),
+        binary[:, :ring].ravel(),
+        binary[:, -ring:].ravel(),
+    ])
 
     if border.mean() > 127:
         binary = cv2.bitwise_not(binary)
 
     binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, MORPH_KERNEL)
 
-    return MaskToRect(binary, x0, y0, scale, MIN_REGION_RATIO * binary.size, bounds)
+    return MaskToRect(
+        binary,
+        x0,
+        y0,
+        scale,
+        MIN_REGION_RATIO * binary.size,
+        bounds
+    )
 
 
 def MagicWand(array, seed, region, tolerance):
@@ -265,15 +316,30 @@ def MagicWand(array, seed, region, tolerance):
     if not (0 <= seed_x < x1 - x0 and 0 <= seed_y < y1 - y0):
         return None
 
-    crop = cv2.GaussianBlur(np.ascontiguousarray(array[y0:y1, x0:x1]), (5, 5), 0)
+    crop = cv2.GaussianBlur(
+        np.ascontiguousarray(array[y0:y1, x0:x1]),
+        (5, 5),
+        0
+    )
 
     mask = np.zeros((crop.shape[0] + 2, crop.shape[1] + 2), np.uint8)
     difference = (tolerance, tolerance, tolerance)
 
-    flags = 8 | cv2.FLOODFILL_MASK_ONLY | cv2.FLOODFILL_FIXED_RANGE | (255 << 8)
+    flags = (
+        8
+        | cv2.FLOODFILL_MASK_ONLY
+        | cv2.FLOODFILL_FIXED_RANGE
+        | (255 << 8)
+    )
 
     _, _, _, rect = cv2.floodFill(
-        crop, mask, (seed_x, seed_y), 0, difference, difference, flags
+        crop,
+        mask,
+        (seed_x, seed_y),
+        0,
+        difference,
+        difference,
+        flags
     )
 
     x, y, rect_width, rect_height = rect
@@ -291,6 +357,7 @@ REFINERS = {
 
 
 class ImageCanvas(QLabel):
+
     def __init__(self, parent=None):
         super().__init__(parent)
 
@@ -313,10 +380,15 @@ class ImageCanvas(QLabel):
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMinimumSize(1, 1)
-        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Ignored,
+            QSizePolicy.Policy.Ignored
+        )
 
     def SetImage(self, image_path):
-        self.pixmap = QPixmap(str(image_path))
+        reader = QImageReader(str(image_path))
+        reader.setAutoTransform(True)
+        self.pixmap = QPixmap.fromImage(reader.read())
         self.array = None
         self.start_point = None
         self.end_point = None
@@ -332,14 +404,18 @@ class ImageCanvas(QLabel):
 
     def GetArray(self):
         if self.array is None and not self.pixmap.isNull():
-            image = self.pixmap.toImage().convertToFormat(QImage.Format.Format_RGB888)
+            image = self.pixmap.toImage().convertToFormat(
+                QImage.Format.Format_RGB888
+            )
 
             width = image.width()
             height = image.height()
             stride = image.bytesPerLine()
 
             buffer = np.frombuffer(
-                image.constBits(), dtype=np.uint8, count=height * stride
+                image.constBits(),
+                dtype=np.uint8,
+                count=height * stride
             )
 
             self.array = (
@@ -362,13 +438,19 @@ class ImageCanvas(QLabel):
         widget_width = max(self.width(), 1)
         widget_height = max(self.height(), 1)
 
-        scale = min(widget_width / image_width, widget_height / image_height)
+        scale = min(
+            widget_width / image_width,
+            widget_height / image_height
+        )
 
         width = max(1, round(image_width * scale))
         height = max(1, round(image_height * scale))
 
         self.image_rect = QRectF(
-            (widget_width - width) // 2, (widget_height - height) // 2, width, height
+            (widget_width - width) // 2,
+            (widget_height - height) // 2,
+            width,
+            height
         )
 
     def resizeEvent(self, event):
@@ -392,7 +474,7 @@ class ImageCanvas(QLabel):
 
         return QPointF(
             (x - rect.x()) / rect.width() * self.pixmap.width(),
-            (y - rect.y()) / rect.height() * self.pixmap.height(),
+            (y - rect.y()) / rect.height() * self.pixmap.height()
         )
 
     def ImageRectToWidget(self, rect):
@@ -404,7 +486,7 @@ class ImageCanvas(QLabel):
             base.x() + rect.x() * scale_x,
             base.y() + rect.y() * scale_y,
             rect.width() * scale_x,
-            rect.height() * scale_y,
+            rect.height() * scale_y
         )
 
     def FindBoxAt(self, position):
@@ -468,7 +550,7 @@ class ImageCanvas(QLabel):
             self.scaled = self.pixmap.scaled(
                 QSize(int(rect.width()), int(rect.height())),
                 Qt.AspectRatioMode.IgnoreAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
+                Qt.TransformationMode.SmoothTransformation
             )
 
         painter.drawPixmap(rect.topLeft(), self.scaled)
@@ -481,7 +563,7 @@ class ImageCanvas(QLabel):
                 GetClassColor(class_id),
                 4 if index == self.hover_index else 2,
                 GetClassLabel(class_id),
-                GetContrastColor(class_id),
+                GetContrastColor(class_id)
             )
 
         if self.drawing and self.start_point and self.end_point:
@@ -495,7 +577,7 @@ class ImageCanvas(QLabel):
                 GetClassColor(class_id),
                 2,
                 GetClassLabel(class_id),
-                GetContrastColor(class_id),
+                GetContrastColor(class_id)
             )
 
     def mousePressEvent(self, event):
@@ -535,7 +617,10 @@ class ImageCanvas(QLabel):
     def BuildBox(self):
         box = QRectF(self.start_point, self.end_point).normalized()
 
-        dragged = box.width() >= MIN_BOX_SIZE and box.height() >= MIN_BOX_SIZE
+        dragged = (
+            box.width() >= MIN_BOX_SIZE
+            and box.height() >= MIN_BOX_SIZE
+        )
 
         method = GetSelectedMethod()
 
@@ -545,7 +630,7 @@ class ImageCanvas(QLabel):
                 self.GetArray(),
                 box.center() if dragged else self.start_point,
                 box if dragged else None,
-                GetTolerance(),
+                GetTolerance()
             )
 
         if not dragged:
@@ -561,7 +646,10 @@ class ImageCanvas(QLabel):
         return box if result is None else result
 
     def mouseReleaseEvent(self, event):
-        if event.button() != Qt.MouseButton.LeftButton or not self.drawing:
+        if (
+            event.button() != Qt.MouseButton.LeftButton
+            or not self.drawing
+        ):
             return
 
         end = self.WidgetToImage(event.position(), True)
@@ -592,6 +680,14 @@ class ImageCanvas(QLabel):
 
     def keyPressEvent(self, event):
         if (
+            event.key() == Qt.Key.Key_P
+            and model_path is not None
+            and not self.drawing
+        ):
+            PredictCurrent()
+            return
+
+        if (
             event.key() == Qt.Key.Key_Backspace
             and not self.drawing
             and 0 <= self.hover_index < len(self.boxes)
@@ -611,7 +707,9 @@ def Start(folder):
 
     if not UI_FILE.open(QFile.OpenModeFlag.ReadOnly):
         Verbose.Write(
-            _TAG, "Error to initialize interface", Verbose.CONSOLE_STATUS.ERROR
+            _TAG,
+            "Error to initialize interface",
+            Verbose.CONSOLE_STATUS.ERROR
         )
         return 1
 
@@ -619,13 +717,21 @@ def Start(folder):
     UI_FILE.close()
 
     if window is None:
-        Verbose.Write(_TAG, "Error to load UI file", Verbose.CONSOLE_STATUS.ERROR)
+        Verbose.Write(
+            _TAG,
+            "Error to load UI file",
+            Verbose.CONSOLE_STATUS.ERROR
+        )
         return 1
 
     GetImages(folder)
 
     if not image_files:
-        Verbose.Write(_TAG, "No images found", Verbose.CONSOLE_STATUS.ERROR)
+        Verbose.Write(
+            _TAG,
+            "No images found",
+            Verbose.CONSOLE_STATUS.ERROR
+        )
         return 1
 
     LoadMetadata(folder)
@@ -643,7 +749,11 @@ def BindWidgets():
         widget = window.findChild(kind, name)
 
         if widget is None:
-            Verbose.Write(_TAG, f"{name} not found", Verbose.CONSOLE_STATUS.ERROR)
+            Verbose.Write(
+                _TAG,
+                f"{name} not found",
+                Verbose.CONSOLE_STATUS.ERROR
+            )
             return False
 
         ui[name] = widget
@@ -675,7 +785,9 @@ def Configure():
     for tolerance in TOLERANCES:
         ui["tolerance_dropdown"].addItem(str(tolerance), tolerance)
 
-    ui["tolerance_dropdown"].setCurrentIndex(TOLERANCES.index(DEFAULT_TOLERANCE))
+    ui["tolerance_dropdown"].setCurrentIndex(
+        TOLERANCES.index(DEFAULT_TOLERANCE)
+    )
 
     ui["method_dropdown"].addItems(METHODS)
     ui["method_dropdown"].currentIndexChanged.connect(OnMethodChanged)
@@ -687,6 +799,7 @@ def Configure():
     ui["class_name_edit"].editingFinished.connect(RenameSelectedClass)
     ui["class_name_edit"].returnPressed.connect(canvas.setFocus)
 
+    ConfigureModel()
     LoadCurrentImage()
 
     return True
@@ -700,12 +813,15 @@ def LoadCurrentImage():
 
     if canvas.pixmap.isNull():
         Verbose.Write(
-            _TAG, f"Failed to load image: {path}", Verbose.CONSOLE_STATUS.ERROR
+            _TAG,
+            f"Failed to load image: {path}",
+            Verbose.CONSOLE_STATUS.ERROR
         )
 
     UpdateImageLabelText()
     UpdateNavigation()
     UpdateStatus()
+    AutoPredictIfNeeded()
 
 
 def Navigate(step):
@@ -804,7 +920,9 @@ def LoadMetadata(folder):
         if parsed is None:
             other_lines.append(line)
             Verbose.Write(
-                _TAG, f"Ignored metadata line: {line}", Verbose.CONSOLE_STATUS.ERROR
+                _TAG,
+                f"Ignored metadata line: {line}",
+                Verbose.CONSOLE_STATUS.ERROR
             )
             continue
 
@@ -822,7 +940,9 @@ def LoadMetadata(folder):
             continue
 
         seen.add(signature)
-        boxes_by_image.setdefault(image_files[index], []).append((box, class_id))
+        boxes_by_image.setdefault(image_files[index], []).append(
+            (box, class_id)
+        )
 
     for index, path in enumerate(image_files):
         boxes = boxes_by_image.get(path)
@@ -844,7 +964,9 @@ def SaveMetadata():
         WriteMetadataLines(lines)
     except OSError as error:
         Verbose.Write(
-            _TAG, f"Failed to save metadata: {error}", Verbose.CONSOLE_STATUS.ERROR
+            _TAG,
+            f"Failed to save metadata: {error}",
+            Verbose.CONSOLE_STATUS.ERROR
         )
 
 
@@ -913,7 +1035,8 @@ def RenameSelectedClass():
         class_names.pop(class_id, None)
 
     ui["class_dropdown"].setItemText(
-        ui["class_dropdown"].currentIndex(), FormatClassItem(class_id)
+        ui["class_dropdown"].currentIndex(),
+        FormatClassItem(class_id)
     )
 
     canvas.update()
@@ -921,6 +1044,183 @@ def RenameSelectedClass():
 
 def GetSelectedMethod():
     return ui["method_dropdown"].currentText()
+
+
+def FindModelPath():
+    if MODEL_PATH.exists():
+        return MODEL_PATH
+
+    found = [path for path in Path(".").glob(MODEL_GLOB) if path.is_file()]
+
+    if not found:
+        return None
+
+    return max(found, key=lambda path: path.stat().st_mtime)
+
+
+def ConfigureModel():
+    global model_path
+
+    model_path = FindModelPath()
+
+    if model_path is None:
+        ui["model_bar"].setVisible(False)
+        return
+
+    for confidence in CONFIDENCES:
+        ui["conf_dropdown"].addItem(f"{confidence:.2f}", confidence)
+
+    ui["conf_dropdown"].setCurrentIndex(CONFIDENCES.index(DEFAULT_CONFIDENCE))
+    ui["model_label"].setText(
+        f"Model  ·  {model_path.parent.parent.name} / {model_path.name}"
+    )
+    ui["predict_button"].clicked.connect(PredictCurrent)
+    ui["model_bar"].setVisible(True)
+
+
+def DisableModel():
+    global model_path
+
+    model_path = None
+    ui["model_bar"].setVisible(False)
+
+
+def GetConfidence():
+    confidence = ui["conf_dropdown"].currentData()
+
+    return confidence if confidence is not None else DEFAULT_CONFIDENCE
+
+
+def RefreshClassItems():
+    dropdown = ui["class_dropdown"]
+
+    for index in range(dropdown.count()):
+        dropdown.setItemText(index, FormatClassItem(dropdown.itemData(index)))
+
+    SyncClassNameEdit()
+
+
+def ApplyModelNames(names):
+    items = names.items() if isinstance(names, dict) else enumerate(names)
+
+    for index, name in items:
+        class_names.setdefault(int(index) + 1, str(name))
+
+    RefreshClassItems()
+
+
+def LoadModel():
+    global model
+
+    if model is None:
+        from ultralytics import YOLO
+
+        model = YOLO(str(model_path))
+        ApplyModelNames(model.names)
+
+    return model
+
+
+def PredictBoxes(path, confidence):
+    result = LoadModel().predict(
+        source=str(path),
+        conf=confidence,
+        imgsz=MODEL_IMAGE_SIZE,
+        device=MODEL_DEVICE,
+        verbose=False,
+    )[0]
+
+    boxes = []
+
+    for corners, class_index in zip(
+        result.boxes.xyxy.tolist(), result.boxes.cls.tolist()
+    ):
+        x1, y1, x2, y2 = corners
+
+        boxes.append((
+            QRectF(QPointF(x1, y1), QPointF(x2, y2)).normalized(),
+            int(class_index) + 1,
+        ))
+
+    return boxes
+
+
+def BoxIou(first, second):
+    overlap = first.intersected(second)
+
+    if overlap.isEmpty():
+        return 0.0
+
+    area = overlap.width() * overlap.height()
+    union = (
+        first.width() * first.height()
+        + second.width() * second.height()
+        - area
+    )
+
+    return area / union if union > 0 else 0.0
+
+
+def PredictCurrent():
+    if model_path is None or canvas is None:
+        return
+
+    path = image_files[image_count]
+
+    QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+
+    try:
+        predictions = PredictBoxes(path, GetConfidence())
+    except ImportError:
+        Verbose.Write(
+            _TAG,
+            "Error: package ultralytics is not installed.",
+            Verbose.CONSOLE_STATUS.ERROR
+        )
+        DisableModel()
+        return
+    except Exception as error:
+        Verbose.Write(
+            _TAG,
+            f"Prediction failed: {error}",
+            Verbose.CONSOLE_STATUS.ERROR
+        )
+        return
+    finally:
+        QApplication.restoreOverrideCursor()
+
+    predicted_images.add(path)
+    added = 0
+
+    for box, class_id in predictions:
+        if any(
+            existing_class == class_id
+            and BoxIou(box, existing) > PREDICT_DUPLICATE_IOU
+            for existing, existing_class in canvas.boxes
+        ):
+            continue
+
+        canvas.boxes.append((box, class_id))
+        added += 1
+
+    if added:
+        canvas.update()
+        OnBoxesChanged()
+
+    UpdateStatus()
+
+    suffix = f"+{added} predicted" if added else "nothing new detected"
+    ui["count_label"].setText(f"{ui['count_label'].text()}  ·  {suffix}")
+
+
+def AutoPredictIfNeeded():
+    if model_path is None or not ui["auto_predict_check"].isChecked():
+        return
+
+    if image_files[image_count] in predicted_images or canvas.boxes:
+        return
+
+    PredictCurrent()
 
 
 def GetTolerance():
@@ -946,7 +1246,10 @@ def SetLabelText(label_name, text):
 
 
 def UpdateImageLabelText():
-    SetLabelText("image_label", f"{image_count + 1} / {len(image_files)}")
+    SetLabelText(
+        "image_label",
+        f"{image_count + 1} / {len(image_files)}"
+    )
 
 
 def GetImages(folder):

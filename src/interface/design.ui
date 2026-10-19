@@ -58,10 +58,58 @@ QLabel#image_label {
     color: #FFFFFF;
 }
 
-QLabel#method_label, QLabel#class_label, QLabel#tolerance_label {
+QLabel#method_label, QLabel#class_label, QLabel#tolerance_label, QLabel#conf_label {
     color: #8A90A2;
     font-size: 8pt;
     font-weight: 600;
+}
+
+QFrame#model_bar {
+    background-color: #14161C;
+    border: none;
+    border-bottom: 1px solid #2A2E39;
+}
+
+QLabel#model_label {
+    color: #8A90A2;
+    font-size: 9pt;
+}
+
+QCheckBox {
+    spacing: 8px;
+    color: #C9CDD8;
+}
+
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid #383C49;
+    border-radius: 4px;
+    background-color: #252832;
+}
+
+QCheckBox::indicator:hover {
+    border: 1px solid #528BFF;
+}
+
+QCheckBox::indicator:checked {
+    background-color: #2F6BFF;
+    border: 1px solid #2F6BFF;
+}
+
+QPushButton#predict_button {
+    background-color: #1F9D6B;
+    border: 1px solid #1F9D6B;
+}
+
+QPushButton#predict_button:hover {
+    background-color: #26B57D;
+    border: 1px solid #26B57D;
+}
+
+QPushButton#predict_button:pressed {
+    background-color: #17805A;
+    border: 1px solid #17805A;
 }
 
 QLabel#file_label {
@@ -203,7 +251,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
     height: 0px;
 }</string>
   </property>
-  <layout class="QVBoxLayout" name="root_layout" stretch="0,1,0">
+  <layout class="QVBoxLayout" name="root_layout" stretch="0,0,1,0">
    <property name="spacing">
     <number>0</number>
    </property>
@@ -409,6 +457,111 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         </property>
         <property name="text">
          <string>NEXT</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QFrame" name="model_bar">
+     <property name="visible">
+      <bool>false</bool>
+     </property>
+     <property name="minimumSize">
+      <size>
+       <width>0</width>
+       <height>46</height>
+      </size>
+     </property>
+     <property name="maximumSize">
+      <size>
+       <width>16777215</width>
+       <height>46</height>
+      </size>
+     </property>
+     <property name="frameShape">
+      <enum>QFrame::Shape::NoFrame</enum>
+     </property>
+     <layout class="QHBoxLayout" name="model_layout">
+      <property name="spacing">
+       <number>12</number>
+      </property>
+      <property name="leftMargin">
+       <number>18</number>
+      </property>
+      <property name="topMargin">
+       <number>6</number>
+      </property>
+      <property name="rightMargin">
+       <number>18</number>
+      </property>
+      <property name="bottomMargin">
+       <number>6</number>
+      </property>
+      <item>
+       <widget class="QLabel" name="model_label">
+        <property name="text">
+         <string>MODEL</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <spacer name="model_spacer">
+        <property name="orientation">
+         <enum>Qt::Orientation::Horizontal</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>40</width>
+          <height>20</height>
+         </size>
+        </property>
+       </spacer>
+      </item>
+      <item>
+       <widget class="QCheckBox" name="auto_predict_check">
+        <property name="toolTip">
+         <string>Predict automatically when opening an image that has no boxes</string>
+        </property>
+        <property name="text">
+         <string>Auto-predict new images</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="conf_label">
+        <property name="text">
+         <string>CONFIDENCE</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QComboBox" name="conf_dropdown">
+        <property name="minimumSize">
+         <size>
+          <width>90</width>
+          <height>0</height>
+         </size>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="predict_button">
+        <property name="minimumSize">
+         <size>
+          <width>110</width>
+          <height>0</height>
+         </size>
+        </property>
+        <property name="cursor">
+         <cursorShape>PointingHandCursor</cursorShape>
+        </property>
+        <property name="toolTip">
+         <string>Predict boxes for this image (P)</string>
+        </property>
+        <property name="text">
+         <string>PREDICT</string>
         </property>
        </widget>
       </item>
